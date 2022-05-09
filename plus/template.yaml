@@ -1,0 +1,238 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda ClamAv Final+
+##########################################################################
+#  Parameters & Globals                                                  #
+##########################################################################
+Parameters:
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Description: "Subnet Ids for Lambda to be attached to"
+  VpcSecurityGroupIds:
+    Type : CommaDelimitedList
+    Description: "Security Group Ids for Lambda to be attached with"
+  FileSystemArn:
+    Type: String
+    Description: "File System Arn"
+  SQSQueueArn:
+    Type: String
+    Description: "AV Scan Queue Arn"
+  SQSQueueEndpoint:
+    Type: String
+    Description: "AV Scan Queue Endpoint"
+Globals:
+  Function:
+    Tracing: Active
+    Tags:
+      Application: !Sub 'ClamAv-${AWS::AccountId}'
+Resources:
+##########################################################################
+#  S3 Bucket For upload files to be scanned                                                             #
+##########################################################################
+  S3UploadBucketAlphaPlus:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private
+      BucketName: !Sub 'avscan-uploadbucket-alphaplus-${AWS::AccountId}'
+      NotificationConfiguration: 
+        QueueConfigurations: 
+          - Queue:
+              Fn::GetAtt:
+                - "MySqsQueue"
+                - "Arn"
+            Event: 's3:ObjectCreated:*'
+            
+
+  S3UploadBucketDeltaPlus:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private
+      BucketName: !Sub 'avscan-uploadbucket-deltaplus-${AWS::AccountId}'
+      NotificationConfiguration: 
+        QueueConfigurations: 
+          - Queue:
+              Fn::GetAtt:
+                - "MySqsQueue"
+                - "Arn"
+            Event: 's3:ObjectCreated:*'
+      
+  S3AVScanLogBucketPlus:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub 'avscan-scanlogsbucketplus-${AWS::AccountId}'
+      
+# ##########################################################################
+# #  SQS                                                                   #
+# ##########################################################################
+
+  MySqsQueue:
+      Type: AWS::SQS::Queue
+      Properties: 
+        QueueName: !Sub 'AVScanQueue-${AWS::AccountId}'
+        VisibilityTimeout: 60
+        ReceiveMessageWaitTimeSeconds: 0
+
+  MySqsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties: 
+      PolicyDocument: 
+        Statement: 
+          - Effect: "Allow"
+            Principal: 
+              Service: "s3.amazonaws.com"
+            Action: 
+              - "SQS:SendMessage" 
+              - "SQS:ReceiveMessage"
+            # Resource: !Ref SQSQueueArn
+            Resource: 
+              Fn::GetAtt:
+                - "MySqsQueue"
+                - "Arn" 
+      Queues: 
+        - !Ref MySqsQueue
+
+
+
+# ##########################################################################
+# #  Lambda functions                                                      #
+# ##########################################################################
+  AVScanLambdaDeltaPlusLambdaEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties: 
+      BatchSize: 10
+      Enabled: True
+      EventSourceArn: 
+        Fn::GetAtt:
+          - "MySqsQueue"
+          - "Arn"
+      FunctionName: !Ref AVScanLambdaDeltaPlus
+      MaximumBatchingWindowInSeconds: 30
+      
+  AVScanLambdaDeltaPlus:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt AVScanIamRole.Arn
+      FunctionName: !Sub 'AVScanLambda-DeltaPlus-${AWS::AccountId}' 
+      Description: AVScanLambda Function Delta Plus Variant
+      CodeUri: functionsrc/deltaplus/
+      Runtime: provided.al2
+      Handler: function.handler
+      MemorySize: 10000
+      ReservedConcurrentExecutions: 1
+      Timeout: 900
+      Environment:
+        Variables:
+          ACCOUNTID : !Sub '${AWS::AccountId}'
+      FileSystemConfigs:
+        - Arn: !Ref FileSystemArn
+          LocalMountPath: "/mnt/fs1"
+      VpcConfig:
+        SecurityGroupIds:
+          !Ref VpcSecurityGroupIds
+        SubnetIds:
+          !Ref VpcSubnetIds
+      Layers:
+        - !Ref CustomRuntimeLayer
+        - !Ref ToolingLayer
+        - !Ref ClamAvLayer
+        - !Ref ExtensionsDeltaLayer
+  
+# ##########################################################################
+# #  IAM Role and Policy                                                   #
+# ##########################################################################
+  AVScanIamPolicy:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Action: 
+              - "s3:Get*"
+              - "s3:Put*"
+              - "s3:List*"
+              - "s3:Describe*"
+              - "sqs:*"
+            Resource: "*"
+      PolicyName: !Sub 'AVScanLambda-finalplus-policy-s3-${AWS::AccountId}'
+      Roles: 
+        - !Ref AVScanIamRole
+      
+  AVScanIamRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Description: "Execution Role for AVScanLambda"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+        - "arn:aws:iam::aws:policy/AmazonElasticFileSystemClientFullAccess"
+      Path: /
+      RoleName: !Sub 'AVScanLambda-finalplus-role-${AWS::AccountId}'
+
+# # ##########################################################################
+# # #  Lambda layers                                                         #
+# # ##########################################################################
+  CustomRuntimeLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: avscan-custom-runtime-1-plus
+      Description: Layer containing custom runtime and function code
+      ContentUri: runtime/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+      
+  ToolingLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: ToolingLayer-3-plus
+      Description: Layer containing awscli
+      ContentUri: layers/awscli/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+
+  
+  ExtensionsDeltaLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: clamd-delta-layer-plus
+      Description: ClamdExtensionsLayer-Delta
+      ContentUri: extensionsrc/delta
+      LicenseInfo: 'Available under the MIT-0 license'
+      RetentionPolicy: Delete
+  
+  ClamAvLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: ClamAvLayer-3-plus
+      Description: Layer containing awscli
+      ContentUri: layers/clamav/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+
+# ##########################################################################
+# #  OUTPUTS                                                               #
+# ##########################################################################
+Outputs:
+  S3UploadBucketAlphaPlus:
+    Value: !Ref S3UploadBucketAlphaPlus
+    
+  S3UploadBucketDeltaPlus:
+    Value: !Ref S3UploadBucketDeltaPlus
+    
+  S3ScanLogsPlus:
+    Value: !Ref S3AVScanLogBucketPlus
+  
+  AVScanLambdaDeltaPlus:
+    Value: !Ref AVScanLambdaDeltaPlus
