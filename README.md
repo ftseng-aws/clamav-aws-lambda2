@@ -1,6 +1,6 @@
 # Serverless ClamAV with Lambda Extensions #
 
-## Foreword ##
+## Foreword - PLEASE READ ##
 Code in this repository is meant for illustrative and demonstrative purposes only. This has not been tested or cleared for deployment into production systems. Please do not deploy wholesale into production. Repo Author do not bear any liability or responsibility for such actions.
 
 ## Background ##
