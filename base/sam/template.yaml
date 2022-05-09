@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Lambda ClamAv Final
+##########################################################################
+#  Parameters & Globals                                                  #
+##########################################################################
+Parameters:
+  VpcSubnetIds:
+    Type: CommaDelimitedList
+    Description: "Subnet Ids for Lambda to be attached to"
+  VpcSecurityGroupIds:
+    Type : CommaDelimitedList
+    Description: "Security Group Ids for Lambda to be attached with"
+  FileSystemArn:
+    Type: String
+    Description: "File System Arn"
+Globals:
+  Function:
+    Tracing: Active
+    Tags:
+      Application: !Sub 'ClamAv-${AWS::AccountId}'
+Resources:
+##########################################################################
+#  S3 Bucket For upload files to be scanned                                                             #
+##########################################################################
+  S3UploadBucketAlpha:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private
+      BucketName: !Sub 'avscan-uploadbucket-alpha-${AWS::AccountId}'
+      
+  S3UploadBucketDelta:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private
+      BucketName: !Sub 'avscan-uploadbucket-delta-${AWS::AccountId}'
+      
+  S3UploadBucketGamma:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private
+      BucketName: !Sub 'avscan-uploadbucket-gamma-${AWS::AccountId}'
+      
+  S3AVScanLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: Private
+      BucketName: !Sub 'avscan-scanlogsbucket-${AWS::AccountId}'
+  
+  S3UploadBucketDeltaRuntimeOnly:
+    Type: AWS::S3::Bucket
+    Properties: 
+      AccessControl: Private
+      BucketName: !Sub 'avscan-uploadbucket-delta-ro-${AWS::AccountId}'
+      
+        
+##########################################################################
+#  Lambda functions                                                      #
+##########################################################################
+  AVScanLambdaAlpha:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt AVScanIamRole.Arn
+      FunctionName: !Sub 'AVScanLambda-Alpha-${AWS::AccountId}' 
+      Description: AVScanLambda Function Alpha Variant
+      CodeUri: functionsrc/variant-alpha/
+      Runtime: provided.al2
+      Handler: function.handler
+      MemorySize: 10000
+      Timeout: 900
+      Environment:
+        Variables:
+          ACCOUNTID : !Sub '${AWS::AccountId}'
+      FileSystemConfigs:
+        - Arn: !Ref FileSystemArn
+          LocalMountPath: "/mnt/fs1"
+      VpcConfig:
+        SecurityGroupIds:
+          !Ref VpcSecurityGroupIds
+        SubnetIds:
+          !Ref VpcSubnetIds
+      Layers:
+        - !Ref CustomRuntimeLayer
+        - !Ref ToolingLayer
+        - !Ref ClamAvLayer
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref S3UploadBucketAlpha
+            Events: s3:ObjectCreated:*
+            
+  AVScanLambdaGamma:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt AVScanIamRole.Arn
+      FunctionName: !Sub 'AVScanLambda-Gamma-${AWS::AccountId}' 
+      Description: AVScanLambda Function Gamma Variant
+      CodeUri: functionsrc/variant-gamma/
+      Runtime: provided.al2
+      Handler: function.handler
+      MemorySize: 10000
+      Timeout: 900
+      Environment:
+        Variables:
+          ACCOUNTID : !Sub '${AWS::AccountId}'
+      FileSystemConfigs:
+        - Arn: !Ref FileSystemArn
+          LocalMountPath: "/mnt/fs1"
+      VpcConfig:
+        SecurityGroupIds:
+          !Ref VpcSecurityGroupIds
+        SubnetIds:
+          !Ref VpcSubnetIds
+      Layers:
+        - !Ref CustomRuntimeLayer
+        - !Ref ToolingLayer
+        - !Ref ClamAvLayer
+        - !Ref ExtensionsGammaLayer
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref S3UploadBucketGamma
+            Events: s3:ObjectCreated:*
+            
+  AVScanLambdaDelta:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt AVScanIamRole.Arn
+      FunctionName: !Sub 'AVScanLambda-Delta-${AWS::AccountId}' 
+      Description: AVScanLambda Function Delta Variant
+      CodeUri: functionsrc/variant-delta/
+      Runtime: provided.al2
+      Handler: function.handler
+      MemorySize: 10000
+      Timeout: 900
+      Environment:
+        Variables:
+          ACCOUNTID : !Sub '${AWS::AccountId}'
+      FileSystemConfigs:
+        - Arn: !Ref FileSystemArn
+          LocalMountPath: "/mnt/fs1"
+      VpcConfig:
+        SecurityGroupIds:
+          !Ref VpcSecurityGroupIds
+        SubnetIds:
+          !Ref VpcSubnetIds
+      Layers:
+        - !Ref CustomRuntimeLayer
+        - !Ref ToolingLayer
+        - !Ref ClamAvLayer
+        - !Ref ExtensionsDeltaLayer
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref S3UploadBucketDelta
+            Events: s3:ObjectCreated:*
+            
+  AVScanLambdaDeltaRO:
+    Type: AWS::Serverless::Function
+    Properties:
+      Role: !GetAtt AVScanIamRole.Arn
+      FunctionName: !Sub 'AVScanLambda-Delta-RO-${AWS::AccountId}' 
+      Description: AVScanLambda Function Delta Runtime Only Variant
+      CodeUri: functionsrc/ro/
+      Runtime: provided.al2
+      Handler: function.handler
+      MemorySize: 10000
+      Timeout: 900
+      Environment:
+        Variables:
+          ACCOUNTID : !Sub '${AWS::AccountId}'
+      FileSystemConfigs:
+        - Arn: !Ref FileSystemArn
+          LocalMountPath: "/mnt/fs1"
+      VpcConfig:
+        SecurityGroupIds:
+          !Ref VpcSecurityGroupIds
+        SubnetIds:
+          !Ref VpcSubnetIds
+      Layers:
+        - !Ref CustomRuntimeROLayer
+        - !Ref ToolingLayer
+        - !Ref ClamAvLayer
+        # - !Ref ExtensionsDeltaLayer
+      Events:
+        S3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref S3UploadBucketDeltaRuntimeOnly
+            Events: s3:ObjectCreated:*
+  
+##########################################################################
+#  IAM Role and Policy                                                   #
+##########################################################################
+  AVScanIamPolicy:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Action: 
+              - "s3:Get*"
+              - "s3:Put*"
+              - "s3:List*"
+              - "s3:Describe*"
+            Resource: "*"
+      PolicyName: !Sub 'AVScanLambda-final-policy-s3-${AWS::AccountId}'
+      Roles: 
+        - !Ref AVScanIamRole
+      
+  AVScanIamRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "lambda.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Description: "Execution Role for AVScanLambda"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        - "arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+        - "arn:aws:iam::aws:policy/AmazonElasticFileSystemClientFullAccess"
+      Path: /
+      RoleName: !Sub 'AVScanLambda-final-role-${AWS::AccountId}'
+
+##########################################################################
+#  Lambda layers                                                         #
+##########################################################################
+  CustomRuntimeLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: avscan-custom-runtime-1
+      Description: Layer containing custom runtime and function code
+      ContentUri: runtime/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+      
+  ToolingLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: ToolingLayer-3
+      Description: Layer containing awscli
+      ContentUri: layers/awscli/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+  
+  ExtensionsGammaLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: clamd-gamma-layer
+      Description: ClamdExtensionsLayer-Alpha
+      ContentUri: extensionsrc/gamma/
+      LicenseInfo: 'Available under the MIT-0 license'
+      RetentionPolicy: Delete
+  
+  ExtensionsDeltaLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: clamd-delta-layer
+      Description: ClamdExtensionsLayer-Delta
+      ContentUri: extensionsrc/delta
+      LicenseInfo: 'Available under the MIT-0 license'
+      RetentionPolicy: Delete
+  
+  CustomRuntimeROLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: avscan-custom-runtime-ro-1
+      Description: Layer containing custom runtime and function code
+      ContentUri: runtime_ro/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+  
+
+  
+  ClamAvLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: ClamAvLayer-3
+      Description: Layer containing awscli
+      ContentUri: layers/clamav/
+      LicenseInfo: 'Available under the MIT-0 license.'
+      RetentionPolicy: Delete
+
+##########################################################################
+#  OUTPUTS                                                               #
+##########################################################################
+Outputs:
+  S3UploadBucketAlpha:
+    Value: !Ref S3UploadBucketAlpha
+    
+  S3UploadBucketDelta:
+    Value: !Ref S3UploadBucketDelta
+    
+  S3UploadBucketGamma:
+    Value: !Ref S3UploadBucketGamma
